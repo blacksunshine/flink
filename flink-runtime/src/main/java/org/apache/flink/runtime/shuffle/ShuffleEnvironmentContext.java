@@ -19,9 +19,9 @@
 package org.apache.flink.runtime.shuffle;
 
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.runtime.clusterframework.types.ResourceID;
-import org.apache.flink.runtime.io.disk.iomanager.IOManager;
 import org.apache.flink.runtime.io.network.TaskEventPublisher;
 
 import java.net.InetAddress;
@@ -34,30 +34,27 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
 public class ShuffleEnvironmentContext {
 	private final Configuration configuration;
 	private final ResourceID taskExecutorResourceId;
-	private final long maxJvmHeapMemory;
+	private final MemorySize networkMemorySize;
 	private final boolean localCommunicationOnly;
 	private final InetAddress hostAddress;
 	private final TaskEventPublisher eventPublisher;
 	private final MetricGroup parentMetricGroup;
-	private final IOManager ioManager;
 
 	public ShuffleEnvironmentContext(
 			Configuration configuration,
 			ResourceID taskExecutorResourceId,
-			long maxJvmHeapMemory,
+			MemorySize networkMemorySize,
 			boolean localCommunicationOnly,
 			InetAddress hostAddress,
 			TaskEventPublisher eventPublisher,
-			MetricGroup parentMetricGroup,
-			IOManager ioManager) {
+			MetricGroup parentMetricGroup) {
 		this.configuration = checkNotNull(configuration);
 		this.taskExecutorResourceId = checkNotNull(taskExecutorResourceId);
-		this.maxJvmHeapMemory = maxJvmHeapMemory;
+		this.networkMemorySize = networkMemorySize;
 		this.localCommunicationOnly = localCommunicationOnly;
 		this.hostAddress = checkNotNull(hostAddress);
 		this.eventPublisher = checkNotNull(eventPublisher);
 		this.parentMetricGroup = checkNotNull(parentMetricGroup);
-		this.ioManager = checkNotNull(ioManager);
 	}
 
 	public Configuration getConfiguration() {
@@ -68,8 +65,8 @@ public class ShuffleEnvironmentContext {
 		return taskExecutorResourceId;
 	}
 
-	public long getMaxJvmHeapMemory() {
-		return maxJvmHeapMemory;
+	public MemorySize getNetworkMemorySize() {
+		return networkMemorySize;
 	}
 
 	public boolean isLocalCommunicationOnly() {
@@ -86,9 +83,5 @@ public class ShuffleEnvironmentContext {
 
 	public MetricGroup getParentMetricGroup() {
 		return parentMetricGroup;
-	}
-
-	public IOManager getIOManager() {
-		return ioManager;
 	}
 }

@@ -18,7 +18,6 @@
 
 package org.apache.flink.runtime.jobmaster;
 
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.configuration.IllegalConfigurationException;
@@ -29,21 +28,19 @@ import org.apache.flink.runtime.blob.BlobWriter;
 import org.apache.flink.runtime.execution.librarycache.BlobLibraryCacheManager;
 import org.apache.flink.runtime.execution.librarycache.FlinkUserCodeClassLoaders;
 import org.apache.flink.runtime.execution.librarycache.LibraryCacheManager;
-import org.apache.flink.runtime.executiongraph.restart.RestartStrategyFactory;
+import org.apache.flink.runtime.rest.handler.legacy.backpressure.BackPressureRequestCoordinator;
 import org.apache.flink.runtime.rest.handler.legacy.backpressure.BackPressureStatsTracker;
 import org.apache.flink.runtime.rest.handler.legacy.backpressure.BackPressureStatsTrackerImpl;
-import org.apache.flink.runtime.rest.handler.legacy.backpressure.StackTraceSampleCoordinator;
 import org.apache.flink.runtime.util.ExecutorThreadFactory;
 import org.apache.flink.runtime.util.Hardware;
 import org.apache.flink.util.ExceptionUtils;
 
 import javax.annotation.Nonnull;
 
+import java.time.Duration;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-
-import scala.concurrent.duration.FiniteDuration;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
@@ -57,9 +54,7 @@ public class JobManagerSharedServices {
 
 	private final LibraryCacheManager libraryCacheManager;
 
-	private final RestartStrategyFactory restartStrategyFactory;
-
-	private final StackTraceSampleCoordinator stackTraceSampleCoordinator;
+	private final BackPressureRequestCoordinator backPressureSampleCoordinator;
 
 	private final BackPressureStatsTracker backPressureStatsTracker;
 
@@ -69,15 +64,13 @@ public class JobManagerSharedServices {
 	public JobManagerSharedServices(
 			ScheduledExecutorService scheduledExecutorService,
 			LibraryCacheManager libraryCacheManager,
-			RestartStrategyFactory restartStrategyFactory,
-			StackTraceSampleCoordinator stackTraceSampleCoordinator,
+			BackPressureRequestCoordinator backPressureSampleCoordinator,
 			BackPressureStatsTracker backPressureStatsTracker,
 			@Nonnull BlobWriter blobWriter) {
 
 		this.scheduledExecutorService = checkNotNull(scheduledExecutorService);
 		this.libraryCacheManager = checkNotNull(libraryCacheManager);
-		this.restartStrategyFactory = checkNotNull(restartStrategyFactory);
-		this.stackTraceSampleCoordinator = checkNotNull(stackTraceSampleCoordinator);
+		this.backPressureSampleCoordinator = checkNotNull(backPressureSampleCoordinator);
 		this.backPressureStatsTracker = checkNotNull(backPressureStatsTracker);
 		this.blobWriter = blobWriter;
 	}
@@ -88,10 +81,6 @@ public class JobManagerSharedServices {
 
 	public LibraryCacheManager getLibraryCacheManager() {
 		return libraryCacheManager;
-	}
-
-	public RestartStrategyFactory getRestartStrategyFactory() {
-		return restartStrategyFactory;
 	}
 
 	public BackPressureStatsTracker getBackPressureStatsTracker() {
@@ -122,7 +111,7 @@ public class JobManagerSharedServices {
 		}
 
 		libraryCacheManager.shutdown();
-		stackTraceSampleCoordinator.shutDown();
+		backPressureSampleCoordinator.shutDown();
 		backPressureStatsTracker.shutDown();
 
 		if (firstException != null) {
@@ -136,7 +125,7 @@ public class JobManagerSharedServices {
 
 	public static JobManagerSharedServices fromConfiguration(
 			Configuration config,
-			BlobServer blobServer) throws Exception {
+			BlobServer blobServer) {
 
 		checkNotNull(config);
 		checkNotNull(blobServer);
@@ -149,12 +138,13 @@ public class JobManagerSharedServices {
 		final BlobLibraryCacheManager libraryCacheManager =
 			new BlobLibraryCacheManager(
 				blobServer,
-				FlinkUserCodeClassLoaders.ResolveOrder.fromString(classLoaderResolveOrder),
-				alwaysParentFirstLoaderPatterns);
+				BlobLibraryCacheManager.defaultClassLoaderFactory(
+					FlinkUserCodeClassLoaders.ResolveOrder.fromString(classLoaderResolveOrder),
+					alwaysParentFirstLoaderPatterns));
 
-		final FiniteDuration timeout;
+		final Duration akkaTimeout;
 		try {
-			timeout = AkkaUtils.getTimeout(config);
+			akkaTimeout = AkkaUtils.getTimeout(config);
 		} catch (NumberFormatException e) {
 			throw new IllegalConfigurationException(AkkaUtils.formatDurationParsingErrorMessage());
 		}
@@ -163,15 +153,17 @@ public class JobManagerSharedServices {
 				Hardware.getNumberCPUCores(),
 				new ExecutorThreadFactory("jobmanager-future"));
 
-		final StackTraceSampleCoordinator stackTraceSampleCoordinator =
-			new StackTraceSampleCoordinator(futureExecutor, timeout.toMillis());
+		final int numSamples = config.getInteger(WebOptions.BACKPRESSURE_NUM_SAMPLES);
+		final long delayBetweenSamples = config.getInteger(WebOptions.BACKPRESSURE_DELAY);
+		final BackPressureRequestCoordinator coordinator = new BackPressureRequestCoordinator(
+			futureExecutor,
+			akkaTimeout.toMillis() + numSamples * delayBetweenSamples);
+
 		final int cleanUpInterval = config.getInteger(WebOptions.BACKPRESSURE_CLEANUP_INTERVAL);
 		final BackPressureStatsTrackerImpl backPressureStatsTracker = new BackPressureStatsTrackerImpl(
-			stackTraceSampleCoordinator,
+			coordinator,
 			cleanUpInterval,
-			config.getInteger(WebOptions.BACKPRESSURE_NUM_SAMPLES),
-			config.getInteger(WebOptions.BACKPRESSURE_REFRESH_INTERVAL),
-			Time.milliseconds(config.getInteger(WebOptions.BACKPRESSURE_DELAY)));
+			config.getInteger(WebOptions.BACKPRESSURE_REFRESH_INTERVAL));
 
 		futureExecutor.scheduleWithFixedDelay(
 			backPressureStatsTracker::cleanUpOperatorStatsCache,
@@ -182,8 +174,7 @@ public class JobManagerSharedServices {
 		return new JobManagerSharedServices(
 			futureExecutor,
 			libraryCacheManager,
-			RestartStrategyFactory.createRestartStrategyFactory(config),
-			stackTraceSampleCoordinator,
+			coordinator,
 			backPressureStatsTracker,
 			blobServer);
 	}

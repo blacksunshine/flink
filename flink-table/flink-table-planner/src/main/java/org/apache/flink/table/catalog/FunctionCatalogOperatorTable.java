@@ -19,8 +19,10 @@
 package org.apache.flink.table.catalog;
 
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.calcite.FlinkTypeFactory;
 import org.apache.flink.table.functions.AggregateFunctionDefinition;
+import org.apache.flink.table.functions.BuiltInFunctionDefinition;
 import org.apache.flink.table.functions.FunctionDefinition;
 import org.apache.flink.table.functions.ScalarFunctionDefinition;
 import org.apache.flink.table.functions.TableFunctionDefinition;
@@ -32,6 +34,7 @@ import org.apache.calcite.sql.SqlIdentifier;
 import org.apache.calcite.sql.SqlOperator;
 import org.apache.calcite.sql.SqlOperatorTable;
 import org.apache.calcite.sql.SqlSyntax;
+import org.apache.calcite.sql.validate.SqlNameMatcher;
 
 import java.util.List;
 import java.util.Optional;
@@ -57,7 +60,8 @@ public class FunctionCatalogOperatorTable implements SqlOperatorTable {
 			SqlIdentifier opName,
 			SqlFunctionCategory category,
 			SqlSyntax syntax,
-			List<SqlOperator> operatorList) {
+			List<SqlOperator> operatorList,
+			SqlNameMatcher nameMatcher) {
 		if (!opName.isSimple()) {
 			return;
 		}
@@ -69,7 +73,8 @@ public class FunctionCatalogOperatorTable implements SqlOperatorTable {
 		}
 
 		String name = opName.getSimple();
-		Optional<FunctionLookup.Result> candidateFunction = functionCatalog.lookupFunction(name);
+		Optional<FunctionLookup.Result> candidateFunction = functionCatalog.lookupFunction(
+			UnresolvedIdentifier.of(name));
 
 		candidateFunction.flatMap(lookupResult ->
 			convertToSqlFunction(category, name, lookupResult.getFunctionDefinition())
@@ -92,9 +97,11 @@ public class FunctionCatalogOperatorTable implements SqlOperatorTable {
 				category != null &&
 				category.isTableFunction()) {
 			return convertTableFunction(name, (TableFunctionDefinition) functionDefinition);
+		} else if (functionDefinition instanceof BuiltInFunctionDefinition) {
+			return Optional.empty();
 		}
-
-		return Optional.empty();
+		throw new TableException(
+			"The new type inference for functions is only supported in the Blink planner.");
 	}
 
 	private Optional<SqlFunction> convertAggregateFunction(

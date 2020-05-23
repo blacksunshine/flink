@@ -18,14 +18,16 @@
 
 package org.apache.flink.table.expressions
 
-import org.apache.flink.api.common.typeinfo.{TypeInformation, Types}
+import org.apache.flink.api.common.typeinfo.{LocalTimeTypeInfo, SqlTimeTypeInfo}
 import org.apache.flink.table.api.{TableException, ValidationException}
-import org.apache.flink.table.functions.BuiltInFunctionDefinitions._
 import org.apache.flink.table.expressions.{E => PlannerE, UUID => PlannerUUID}
+import org.apache.flink.table.functions.BuiltInFunctionDefinitions._
 import org.apache.flink.table.functions._
-import org.apache.flink.table.types.logical.LogicalTypeRoot.{CHAR, DECIMAL, SYMBOL, TIMESTAMP_WITHOUT_TIME_ZONE}
+import org.apache.flink.table.types.logical.LogicalTypeRoot.SYMBOL
 import org.apache.flink.table.types.logical.utils.LogicalTypeChecks._
 import org.apache.flink.table.types.utils.TypeConversions.fromDataTypeToLegacyInfo
+
+import java.time.{LocalDate, LocalDateTime}
 
 import _root_.scala.collection.JavaConverters._
 
@@ -111,6 +113,10 @@ class PlannerExpressionConverter private extends ApiExpressionVisitor[PlannerExp
           tafd.getAccumulatorTypeInfo,
           args)
 
+      case _ : UserDefinedFunction =>
+        throw new ValidationException(
+          "The new type inference for functions is only supported in the Blink planner.")
+
       case fd: FunctionDefinition =>
         fd match {
 
@@ -134,12 +140,12 @@ class PlannerExpressionConverter private extends ApiExpressionVisitor[PlannerExp
             expr
 
           case AND =>
-            assert(args.size == 2)
-            And(args.head, args.last)
+            assert(args.size >= 2)
+            args.reduceLeft(And)
 
           case OR =>
-            assert(args.size == 2)
-            Or(args.head, args.last)
+            assert(args.size >= 2)
+            args.reduceLeft(Or)
 
           case NOT =>
             assert(args.size == 1)
@@ -273,6 +279,10 @@ class PlannerExpressionConverter private extends ApiExpressionVisitor[PlannerExp
             assert(args.size == 1)
             Lower(args.head)
 
+          case LOWERCASE =>
+            assert(args.size == 1)
+            Lower(args.head)
+
           case SIMILAR =>
             assert(args.size == 2)
             Similar(args.head, args.last)
@@ -286,12 +296,8 @@ class PlannerExpressionConverter private extends ApiExpressionVisitor[PlannerExp
             }
 
           case REPLACE =>
-            assert(args.size == 2 || args.size == 3)
-            if (args.size == 2) {
-              new Replace(args.head, args.last)
-            } else {
-              Replace(args.head, args(1), args.last)
-            }
+            assert(args.size == 3)
+            Replace(args.head, args(1), args.last)
 
           case TRIM =>
             assert(args.size == 4)
@@ -310,6 +316,10 @@ class PlannerExpressionConverter private extends ApiExpressionVisitor[PlannerExp
             Trim(trimMode, args(2), args(3))
 
           case UPPER =>
+            assert(args.size == 1)
+            Upper(args.head)
+
+          case UPPERCASE =>
             assert(args.size == 1)
             Upper(args.head)
 
@@ -683,6 +693,10 @@ class PlannerExpressionConverter private extends ApiExpressionVisitor[PlannerExp
             assert(args.isEmpty)
             CurrentRow()
 
+          case STREAM_RECORD_TIMESTAMP =>
+            assert(args.isEmpty)
+            StreamRecordTimestamp()
+
           case _ =>
             throw new TableException(s"Unsupported function definition: $fd")
         }
@@ -695,49 +709,29 @@ class PlannerExpressionConverter private extends ApiExpressionVisitor[PlannerExp
       return SymbolPlannerExpression(plannerSymbol)
     }
 
-    val typeInfo = getLiteralTypeInfo(literal)
+    val typeInfo = fromDataTypeToLegacyInfo(literal.getOutputDataType)
     if (literal.isNull) {
       Null(typeInfo)
     } else {
-      Literal(
-        literal.getValueAs(typeInfo.getTypeClass).get(),
-        typeInfo)
-    }
-  }
-
-  /**
-    * This method makes the planner more lenient for new data types defined for literals.
-    */
-  private def getLiteralTypeInfo(literal: ValueLiteralExpression): TypeInformation[_] = {
-    val logicalType = literal.getOutputDataType.getLogicalType
-
-    if (hasRoot(logicalType, DECIMAL)) {
-      if (literal.isNull) {
-        return Types.BIG_DEC
-      }
-      val value = literal.getValueAs(classOf[java.math.BigDecimal]).get()
-      if (hasPrecision(logicalType, value.precision()) && hasScale(logicalType, value.scale())) {
-        return Types.BIG_DEC
+      typeInfo match {
+        case LocalTimeTypeInfo.LOCAL_DATE =>
+          Literal(
+            java.sql.Date.valueOf(literal.getValueAs(classOf[LocalDate]).get()),
+            SqlTimeTypeInfo.DATE)
+        case LocalTimeTypeInfo.LOCAL_DATE_TIME =>
+          Literal(
+            java.sql.Timestamp.valueOf(literal.getValueAs(classOf[LocalDateTime]).get()),
+            SqlTimeTypeInfo.TIMESTAMP)
+        case LocalTimeTypeInfo.LOCAL_TIME =>
+          Literal(
+            java.sql.Time.valueOf(literal.getValueAs(classOf[java.time.LocalTime]).get()),
+            SqlTimeTypeInfo.TIME)
+        case _ =>
+          Literal(
+            literal.getValueAs(typeInfo.getTypeClass).get(),
+            typeInfo)
       }
     }
-
-    else if (hasRoot(logicalType, CHAR)) {
-      if (literal.isNull) {
-        return Types.STRING
-      }
-      val value = literal.getValueAs(classOf[java.lang.String]).get()
-      if (hasLength(logicalType, value.length)) {
-        return Types.STRING
-      }
-    }
-
-    else if (hasRoot(logicalType, TIMESTAMP_WITHOUT_TIME_ZONE)) {
-      if (getPrecision(logicalType) <= 3) {
-        return Types.SQL_TIMESTAMP
-      }
-    }
-
-    fromDataTypeToLegacyInfo(literal.getOutputDataType)
   }
 
   private def getSymbol(symbol: TableSymbol): PlannerSymbol = symbol match {

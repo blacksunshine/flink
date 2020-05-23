@@ -16,6 +16,7 @@
 # limitations under the License.
 ################################################################################
 from pyflink.common.execution_config import ExecutionConfig
+from pyflink.common.job_execution_result import JobExecutionResult
 from pyflink.common.restart_strategy import RestartStrategies
 from pyflink.java_gateway import get_gateway
 from pyflink.util.utils import load_java_class
@@ -70,7 +71,7 @@ class ExecutionEnvironment(object):
         """
         Gets the config object that defines execution parameters.
 
-        :return: The environment's execution configuration.
+        :return: An :class:`ExecutionConfig` object, the environment's execution configuration.
         """
         return ExecutionConfig(self._j_execution_environment.getConfig())
 
@@ -159,11 +160,12 @@ class ExecutionEnvironment(object):
         The program execution will be logged and displayed with the given job name.
 
         :param job_name: Desired name of the job, optional.
+        :return: The result of the job execution, containing elapsed time and accumulators.
         """
         if job_name is None:
-            self._j_execution_environment.execute()
+            return JobExecutionResult(self._j_execution_environment.execute())
         else:
-            self._j_execution_environment.execute(job_name)
+            return JobExecutionResult(self._j_execution_environment.execute(job_name))
 
     def get_execution_plan(self):
         """
@@ -179,15 +181,15 @@ class ExecutionEnvironment(object):
         """
         return self._j_execution_environment.getExecutionPlan()
 
-    @classmethod
-    def get_execution_environment(cls):
+    @staticmethod
+    def get_execution_environment():
         """
         Creates an execution environment that represents the context in which the program is
         currently executed. If the program is invoked standalone, this method returns a local
         execution environment. If the program is invoked from within the command line client to be
         submitted to a cluster, this method returns the execution environment of this cluster.
 
-        :return: The execution environment of the context in which the program is executed.
+        :return: The :class:`ExecutionEnvironment` of the context in which the program is executed.
         """
         gateway = get_gateway()
         j_execution_environment = gateway.jvm.org.apache.flink.api.java.ExecutionEnvironment\

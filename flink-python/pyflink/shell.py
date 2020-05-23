@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 ################################################################################
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -16,13 +17,20 @@
 # limitations under the License.
 ################################################################################
 import platform
+import sys
 
-from pyflink.dataset import ExecutionEnvironment
-from pyflink.datastream import StreamExecutionEnvironment
+from pyflink.common import *
+from pyflink.dataset import *
+from pyflink.datastream import *
 from pyflink.table import *
 from pyflink.table.catalog import *
 from pyflink.table.descriptors import *
 from pyflink.table.window import *
+from pyflink.metrics import *
+from pyflink.ml.api import *
+from pyflink.ml.lib import *
+
+utf8_out = open(sys.stdout.fileno(), mode='w', encoding='utf8', buffering=1)
 
 print("Using Python version %s (%s, %s)" % (
     platform.python_version(),
@@ -31,16 +39,11 @@ print("Using Python version %s (%s, %s)" % (
 
 welcome_msg = u'''
                          \u2592\u2593\u2588\u2588\u2593\u2588\u2588\u2592
-                     \u2593\u2588\u2588\u2588\u2588\u2592\u2592\u2588\u2593 \
-                     \u2592\u2593\u2588\u2588\u2588\u2593\u2592
-                  \u2593\u2588\u2588\u2588\u2593\u2591\u2591        \u2592 \
-                  \u2592\u2592\u2593\u2588\u2588\u2592  \u2592
-                \u2591\u2588\u2588\u2592   \u2592\u2592\u2593\u2593\u2588 \
-                \u2593\u2593\u2592\u2591      \u2592\u2588\u2588\u2588\u2588
-                \u2588\u2588\u2592         \u2591\u2592\u2593\u2588\u2588 \
-                \u2588\u2592    \u2592\u2588\u2592\u2588\u2592
-                  \u2591\u2593\u2588            \u2588\u2588\u2588   \u2593 \
-                  \u2591\u2592\u2588\u2588
+                     \u2593\u2588\u2588\u2588\u2588\u2592\u2592\u2588\u2593\u2592\u2593\u2588\u2588\u2588\u2593\u2592
+                  \u2593\u2588\u2588\u2588\u2593\u2591\u2591        \u2592\u2592\u2592\u2593\u2588\u2588\u2592  \u2592
+                \u2591\u2588\u2588\u2592   \u2592\u2592\u2593\u2593\u2588\u2593\u2593\u2592\u2591      \u2592\u2588\u2588\u2588\u2588
+                \u2588\u2588\u2592         \u2591\u2592\u2593\u2588\u2588\u2588\u2592    \u2592\u2588\u2592\u2588\u2592
+                  \u2591\u2593\u2588            \u2588\u2588\u2588   \u2593\u2591\u2592\u2588\u2588
                     \u2593\u2588       \u2592\u2592\u2592\u2592\u2592\u2593\u2588\u2588\u2593\u2591\u2592\u2591\u2593\u2593\u2588
                   \u2588\u2591 \u2588   \u2592\u2592\u2591       \u2588\u2588\u2588\u2593\u2593\u2588 \u2592\u2588\u2592\u2592\u2592
                   \u2588\u2588\u2588\u2588\u2591   \u2592\u2593\u2588\u2593      \u2588\u2588\u2592\u2592\u2592 \u2593\u2588\u2588\u2588\u2592
@@ -72,7 +75,7 @@ welcome_msg = u'''
 
 NOTE: Use the prebound Table Environment to implement batch or streaming Table programs.
 
-  Batch - Use the 'bt_env' variable
+  Batch - Use 'b_env' and 'bt_env' variables
 
     *
     * import tempfile
@@ -84,25 +87,25 @@ NOTE: Use the prebound Table Environment to implement batch or streaming Table p
     *         os.remove(sink_path)
     *     else:
     *         shutil.rmtree(sink_path)
-    * bt_env.exec_env().set_parallelism(1)
+    * b_env.set_parallelism(1)
     * t = bt_env.from_elements([(1, 'hi', 'hello'), (2, 'hi', 'hello')], ['a', 'b', 'c'])
-    * bt_env.connect(FileSystem().path(sink_path))\
+    * bt_env.connect(FileSystem().path(sink_path)) \\
     *     .with_format(OldCsv()
     *                  .field_delimiter(',')
     *                  .field("a", DataTypes.BIGINT())
     *                  .field("b", DataTypes.STRING())
-    *                  .field("c", DataTypes.STRING()))\
+    *                  .field("c", DataTypes.STRING())) \\
     *     .with_schema(Schema()
     *                  .field("a", DataTypes.BIGINT())
     *                  .field("b", DataTypes.STRING())
-    *                  .field("c", DataTypes.STRING()))\
-    *     .register_table_sink("batch_sink")
+    *                  .field("c", DataTypes.STRING())) \\
+    *     .create_temporary_table("batch_sink")
     *
     * t.select("a + 1, b, c").insert_into("batch_sink")
     *
-    * bt_env.exec_env().execute()
+    * bt_env.execute("batch_job")
 
-  Streaming - Use the 'st_env' variable
+  Streaming - Use 's_env' and 'st_env' variables
 
     *
     * import tempfile
@@ -114,26 +117,30 @@ NOTE: Use the prebound Table Environment to implement batch or streaming Table p
     *         os.remove(sink_path)
     *     else:
     *         shutil.rmtree(sink_path)
-    * st_env.exec_env().set_parallelism(1)
+    * s_env.set_parallelism(1)
     * t = st_env.from_elements([(1, 'hi', 'hello'), (2, 'hi', 'hello')], ['a', 'b', 'c'])
-    * st_env.connect(FileSystem().path(sink_path))\\
+    * st_env.connect(FileSystem().path(sink_path)) \\
     *     .with_format(OldCsv()
     *                  .field_delimiter(',')
     *                  .field("a", DataTypes.BIGINT())
     *                  .field("b", DataTypes.STRING())
-    *                  .field("c", DataTypes.STRING()))\\
+    *                  .field("c", DataTypes.STRING())) \\
     *     .with_schema(Schema()
     *                  .field("a", DataTypes.BIGINT())
     *                  .field("b", DataTypes.STRING())
-    *                  .field("c", DataTypes.STRING()))\\
-    *     .register_table_sink("stream_sink")
+    *                  .field("c", DataTypes.STRING())) \\
+    *     .create_temporary_table("stream_sink")
     * 
     * t.select("a + 1, b, c").insert_into("stream_sink")
     *
-    * st_env.exec_env().execute()
-      '''
-print(welcome_msg)
+    * st_env.execute("stream_job")
+'''
+utf8_out.write(welcome_msg)
 
-bt_env = BatchTableEnvironment.create(ExecutionEnvironment.get_execution_environment())
+b_env = ExecutionEnvironment.get_execution_environment()
 
-st_env = StreamTableEnvironment.create(StreamExecutionEnvironment.get_execution_environment())
+bt_env = BatchTableEnvironment.create(b_env)
+
+s_env = StreamExecutionEnvironment.get_execution_environment()
+
+st_env = StreamTableEnvironment.create(s_env)

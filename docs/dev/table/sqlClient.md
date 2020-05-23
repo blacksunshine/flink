@@ -1,7 +1,7 @@
 ---
 title: "SQL Client"
 nav-parent_id: tableapi
-nav-pos: 100
+nav-pos: 90
 is_beta: true
 ---
 <!--
@@ -136,6 +136,10 @@ Mode "embedded" submits Flink jobs from the local machine.
                                            properties.
      -h,--help                             Show the help message with
                                            descriptions of all options.
+     -hist,--history <History file path>   The file which you want to save the
+                                           command history into. If not
+                                           specified, we will auto-generate one
+                                           under your user's home directory.
      -j,--jar <JAR file>                   A JAR file to be imported into the
                                            session. The file might contain
                                            user-defined classes needed for the
@@ -149,15 +153,90 @@ Mode "embedded" submits Flink jobs from the local machine.
                                            statements such as functions, table
                                            sources, or sinks. Can be used
                                            multiple times.
+     -pyarch,--pyArchives <arg>            Add python archive files for job. The
+                                           archive files will be extracted to
+                                           the working directory of python UDF
+                                           worker. Currently only zip-format is
+                                           supported. For each archive file, a
+                                           target directory be specified. If the
+                                           target directory name is specified,
+                                           the archive file will be extracted to
+                                           a name can directory with the
+                                           specified name. Otherwise, the
+                                           archive file will be extracted to a
+                                           directory with the same name of the
+                                           archive file. The files uploaded via
+                                           this option are accessible via
+                                           relative path. '#' could be used as
+                                           the separator of the archive file
+                                           path and the target directory name.
+                                           Comma (',') could be used as the
+                                           separator to specify multiple archive
+                                           files. This option can be used to
+                                           upload the virtual environment, the
+                                           data files used in Python UDF (e.g.:
+                                           --pyArchives
+                                           file:///tmp/py37.zip,file:///tmp/data
+                                           .zip#data --pyExecutable
+                                           py37.zip/py37/bin/python). The data
+                                           files could be accessed in Python
+                                           UDF, e.g.: f = open('data/data.txt',
+                                           'r').
+     -pyexec,--pyExecutable <arg>          Specify the path of the python
+                                           interpreter used to execute the
+                                           python UDF worker (e.g.:
+                                           --pyExecutable
+                                           /usr/local/bin/python3). The python
+                                           UDF worker depends on Python 3.5+,
+                                           Apache Beam (version == 2.19.0), Pip
+                                           (version >= 7.1.0) and SetupTools
+                                           (version >= 37.0.0). Please ensure
+                                           that the specified environment meets
+                                           the above requirements.
+     -pyfs,--pyFiles <pythonFiles>         Attach custom python files for job.
+                                           These files will be added to the
+                                           PYTHONPATH of both the local client
+                                           and the remote python UDF worker. The
+                                           standard python resource file
+                                           suffixes such as .py/.egg/.zip or
+                                           directory are all supported. Comma
+                                           (',') could be used as the separator
+                                           to specify multiple files (e.g.:
+                                           --pyFiles
+                                           file:///tmp/myresource.zip,hdfs:///$n
+                                           amenode_address/myresource2.zip).
+     -pyreq,--pyRequirements <arg>         Specify a requirements.txt file which
+                                           defines the third-party dependencies.
+                                           These dependencies will be installed
+                                           and added to the PYTHONPATH of the
+                                           python UDF worker. A directory which
+                                           contains the installation packages of
+                                           these dependencies could be specified
+                                           optionally. Use '#' as the separator
+                                           if the optional parameter exists
+                                           (e.g.: --pyRequirements
+                                           file:///tmp/requirements.txt#file:///
+                                           tmp/cached_dir).
      -s,--session <session identifier>     The identifier for a session.
                                            'default' is the default identifier.
+     -u,--update <SQL update statement>    Experimental (for testing only!):
+                                           Instructs the SQL Client to
+                                           immediately execute the given update
+                                           statement after starting up. The
+                                           process is shut down after the
+                                           statement has been submitted to the
+                                           cluster and returns an appropriate
+                                           return code. Currently, this feature
+                                           is only supported for INSERT INTO
+                                           statements that declare the target
+                                           sink table.
 {% endhighlight %}
 
 {% top %}
 
 ### Environment Files
 
-A SQL query needs a configuration environment in which it is executed. The so-called *environment files* define available table sources and sinks, external catalogs, user-defined functions, and other properties required for execution and deployment.
+A SQL query needs a configuration environment in which it is executed. The so-called *environment files* define available catalogs, table sources and sinks, user-defined functions, and other properties required for execution and deployment.
 
 Every environment file is a regular [YAML file](http://yaml.org/). An example of such a file is presented below.
 
@@ -199,9 +278,23 @@ functions:
       - 7.6
       - false
 
-# Execution properties allow for changing the behavior of a table program.
+# Define available catalogs
+
+catalogs:
+   - name: catalog_1
+     type: hive
+     property-version: 1
+     hive-conf-dir: ...
+   - name: catalog_2
+     type: hive
+     property-version: 1
+     default-database: mydb2
+     hive-conf-dir: ...
+
+# Properties that change the fundamental execution behavior of a table program.
 
 execution:
+  planner: blink                    # optional: either 'blink' (default) or 'old'
   type: streaming                   # required: execution mode either 'batch' or 'streaming'
   result-mode: table                # required: either 'table' or 'changelog'
   max-table-result-rows: 1000000    # optional: maximum number of maintained rows in
@@ -212,10 +305,22 @@ execution:
   max-parallelism: 16               # optional: Flink's maximum parallelism (128 by default)
   min-idle-state-retention: 0       # optional: table program's minimum idle state time
   max-idle-state-retention: 0       # optional: table program's maximum idle state time
+  current-catalog: catalog_1        # optional: name of the current catalog of the session ('default_catalog' by default)
+  current-database: mydb1           # optional: name of the current database of the current catalog
+                                    #   (default database of the current catalog by default)
   restart-strategy:                 # optional: restart strategy
     type: fallback                  #   "fallback" to global restart strategy by default
 
-# Deployment properties allow for describing the cluster to which table programs are submitted to.
+# Configuration options for adjusting and tuning table programs.
+
+# A full list of options and their default values can be found
+# on the dedicated "Configuration" page.
+configuration:
+  table.optimizer.join-reorder-enabled: true
+  table.exec.spill-compression.enabled: true
+  table.exec.spill-compression.block-size: 128kb
+
+# Properties that describe the cluster to which table programs are submitted to.
 
 deployment:
   response-timeout: 5000
@@ -226,9 +331,10 @@ This configuration:
 - defines an environment with a table source `MyTableSource` that reads from a CSV file,
 - defines a view `MyCustomView` that declares a virtual table using a SQL query,
 - defines a user-defined function `myUDF` that can be instantiated using the class name and two constructor parameters,
-- specifies a parallelism of 1 for queries executed in this streaming environment,
-- specifies an event-time characteristic, and
-- runs queries in the `table` result mode.
+- connects to two Hive catalogs and uses `catalog_1` as the current catalog with `mydb1` as the current database of the catalog,
+- uses the blink planner in streaming mode for running statements with event-time characteristic and a parallelism of 1,
+- runs exploratory queries in the `table` result mode,
+- and makes some planner adjustments around join reordering and spilling via configuration options.
 
 Depending on the use case, a configuration can be split into multiple files. Therefore, environment files can be created for general purposes (*defaults environment file* using `--defaults`) as well as on a per-session basis (*session environment file* using `--environment`). Every CLI session is initialized with the default properties followed by the session properties. For example, the defaults environment file could specify all table sources that should be available for querying in every session whereas the session environment file only declares a specific state retention time and parallelism. Both default and session environment files can be passed when starting the CLI application. If no default environment file has been specified, the SQL Client searches for `./conf/sql-client-defaults.yaml` in Flink's configuration directory.
 
@@ -290,25 +396,21 @@ tables:
       topic: TaxiRides
       startup-mode: earliest-offset
       properties:
-        - key: zookeeper.connect
-          value: localhost:2181
-        - key: bootstrap.servers
-          value: localhost:9092
-        - key: group.id
-          value: testGroup
+        bootstrap.servers: localhost:9092
+        group.id: testGroup
     format:
       property-version: 1
       type: json
       schema: "ROW<rideId LONG, lon FLOAT, lat FLOAT, rideTime TIMESTAMP>"
     schema:
       - name: rideId
-        type: LONG
+        data-type: BIGINT
       - name: lon
-        type: FLOAT
+        data-type: FLOAT
       - name: lat
-        type: FLOAT
+        data-type: FLOAT
       - name: rowTime
-        type: TIMESTAMP
+        data-type: TIMESTAMP(3)
         rowtime:
           timestamps:
             type: "from-field"
@@ -317,7 +419,7 @@ tables:
             type: "periodic-bounded"
             delay: "60000"
       - name: procTime
-        type: TIMESTAMP
+        data-type: TIMESTAMP(3)
         proctime: true
 {% endhighlight %}
 
@@ -329,30 +431,42 @@ Both `connector` and `format` allow to define a property version (which is curre
 
 ### User-defined Functions
 
-The SQL Client allows users to create custom, user-defined functions to be used in SQL queries. Currently, these functions are restricted to be defined programmatically in Java/Scala classes.
+The SQL Client allows users to create custom, user-defined functions to be used in SQL queries. Currently, these functions are restricted to be defined programmatically in Java/Scala classes or Python files.
 
-In order to provide a user-defined function, you need to first implement and compile a function class that extends `ScalarFunction`, `AggregateFunction` or `TableFunction` (see [User-defined Functions]({{ site.baseurl }}/dev/table/udfs.html)). One or more functions can then be packaged into a dependency JAR for the SQL Client.
+In order to provide a Java/Scala user-defined function, you need to first implement and compile a function class that extends `ScalarFunction`, `AggregateFunction` or `TableFunction` (see [User-defined Functions]({{ site.baseurl }}/dev/table/functions/udfs.html)). One or more functions can then be packaged into a dependency JAR for the SQL Client.
+
+In order to provide a Python user-defined function, you need to write a Python function and decorate it with the `pyflink.table.udf.udf` or `pyflink.table.udf.udtf` decorator (see [Python UDFs]({{ site.baseurl }}/dev/table/python/python_udfs.html)). One or more functions can then be placed into a Python file. The Python file and related dependencies need to be specified via the configuration (see [Python Configuration]({{ site.baseurl }}/dev/table/python/python_config.html)) in environment file or the command line options (see [Command Line Usage]({{ site.baseurl }}/ops/cli.html#usage)).
 
 All functions must be declared in an environment file before being called. For each item in the list of `functions`, one must specify
 
 - a `name` under which the function is registered,
-- the source of the function using `from` (restricted to be `class` for now),
+- the source of the function using `from` (restricted to be `class` (Java/Scala UDF) or `python` (Python UDF) for now),
+
+The Java/Scala UDF must specify:
+
 - the `class` which indicates the fully qualified class name of the function and an optional list of `constructor` parameters for instantiation.
+
+The Python UDF must specify:
+
+- the `fully-qualified-name` which indicates the fully qualified name, i.e the "[module name].[object name]" of the function.
 
 {% highlight yaml %}
 functions:
-  - name: ...               # required: name of the function
-    from: class             # required: source of the function (can only be "class" for now)
-    class: ...              # required: fully qualified class name of the function
-    constructor:            # optimal: constructor parameters of the function class
-      - ...                 # optimal: a literal parameter with implicit type
-      - class: ...          # optimal: full class name of the parameter
-        constructor:        # optimal: constructor parameters of the parameter's class
-          - type: ...       # optimal: type of the literal parameter
-            value: ...      # optimal: value of the literal parameter
+  - name: java_udf               # required: name of the function
+    from: class                  # required: source of the function
+    class: ...                   # required: fully qualified class name of the function
+    constructor:                 # optional: constructor parameters of the function class
+      - ...                      # optional: a literal parameter with implicit type
+      - class: ...               # optional: full class name of the parameter
+        constructor:             # optional: constructor parameters of the parameter's class
+          - type: ...            # optional: type of the literal parameter
+            value: ...           # optional: value of the literal parameter
+  - name: python_udf             # required: name of the function
+    from: python                 # required: source of the function 
+    fully-qualified-name: ...    # required: fully qualified class name of the function      
 {% endhighlight %}
 
-Make sure that the order and types of the specified parameters strictly match one of the constructors of your function class.
+For Java/Scala UDF, make sure that the order and types of the specified parameters strictly match one of the constructors of your function class.
 
 #### Constructor Parameters
 
@@ -410,6 +524,33 @@ This process can be recursively performed until all the constructor parameters a
 
 {% top %}
 
+Catalogs
+--------
+
+Catalogs can be defined as a set of YAML properties and are automatically registered to the environment upon starting SQL Client.
+
+Users can specify which catalog they want to use as the current catalog in SQL CLI, and which database of the catalog they want to use as the current database.
+
+{% highlight yaml %}
+catalogs:
+   - name: catalog_1
+     type: hive
+     property-version: 1
+     default-database: mydb2
+     hive-conf-dir: <path of Hive conf directory>
+   - name: catalog_2
+     type: hive
+     property-version: 1
+     hive-conf-dir: <path of Hive conf directory>
+
+execution:
+   ...
+   current-catalog: catalog_1
+   current-database: mydb1
+{% endhighlight %}
+
+For more information about catalogs, see [Catalogs]({{ site.baseurl }}/dev/table/catalogs.html).
+
 Detached SQL Queries
 --------------------
 
@@ -432,25 +573,21 @@ tables:
       version: "0.11"
       topic: OutputTopic
       properties:
-        - key: zookeeper.connect
-          value: localhost:2181
-        - key: bootstrap.servers
-          value: localhost:9092
-        - key: group.id
-          value: testGroup
+        bootstrap.servers: localhost:9092
+        group.id: testGroup
     format:
       property-version: 1
       type: json
       derive-schema: true
     schema:
       - name: rideId
-        type: LONG
+        data-type: BIGINT
       - name: lon
-        type: FLOAT
+        data-type: FLOAT
       - name: lat
-        type: FLOAT
+        data-type: FLOAT
       - name: rideTime
-        type: TIMESTAMP
+        data-type: TIMESTAMP(3)
 {% endhighlight %}
 
 The SQL Client makes sure that a statement is successfully submitted to the cluster. Once the query is submitted, the CLI will show information about the Flink job.
@@ -526,11 +663,11 @@ tables:
     format: # ...
     schema:
       - name: integerField
-        type: INT
+        data-type: INT
       - name: stringField
-        type: VARCHAR
+        data-type: STRING
       - name: rowtimeField
-        type: TIMESTAMP
+        data-type: TIMESTAMP(3)
         rowtime:
           timestamps:
             type: from-field
